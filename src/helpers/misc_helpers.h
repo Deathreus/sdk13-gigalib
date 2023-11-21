@@ -34,8 +34,9 @@ bool UTIL_CheckRealRemoteAddr(netadr_t netaddr);
 bool UTIL_GetRealRemoteAddr(char* ipadr);
 #endif // clientdll
 bool UTIL_IsFakePlayer(CBasePlayer* inplayer);
-bool UTIL_IsVTFValid(const char* fileloc);
-void UTIL_AddrToString(void* inAddr, char outAddrStr[11]);
+bool UTIL_IsVTFValid(std::string& instr);
+std::unique_ptr<byte> UTIL_SmartLoadFileForMe(std::string& infile, int* pLength);
+std::string UTIL_AddrToString(void* inAddr);
 
 
 // https://stackoverflow.com/a/57346888
@@ -183,5 +184,11 @@ public:
 
 static_assert( sizeof(FakeConVar) == sizeof(ConVar) );
 
+
+bool checkWine();
+
+
+// need to clean this up
+const char* HACK_COM_GetModDirectory();
 
 #endif

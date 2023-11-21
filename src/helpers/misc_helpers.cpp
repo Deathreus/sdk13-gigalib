@@ -66,110 +66,138 @@ bool UTIL_IsFakePlayer(CBasePlayer* inplayer)
 	return false;
 }
 
-bool UTIL_IsVTFValid(const char* fileloc)
+bool UTIL_IsVTFValid(std::string& fileloc)
 {
-	int len = 0;
-	byte* bytes = UTIL_LoadFileForMe(fileloc, &len);
+    int len = 0;
+    auto bytes = UTIL_SmartLoadFileForMe(fileloc, &len);
+    if (!len)
+    {
+        //AssertMsg(NULL, "Downloaded file is NULL!\n");
+        return true;
+    }
 
-	if (!len)
-	{
-		//AssertMsg(NULL, "Downloaded file is NULL!\n");
-		return true;
-	}
+    // sanity check - smallest i have seen is 96 bytes
+    if (len <= 64)
+    {
+        AssertMsg(NULL, "Downloaded file is too small!\n");
+        return false;
+    }
 
-	// sanity check - smallest i have seen is 96 bytes
-	if (len <= 64)
-	{
-		AssertMsg(NULL, "Downloaded file is too small!\n");
-		return false;
-	}
+    // Get our header
+    auto vtfheader = std::make_unique<VTFFileHeader_t>();
+    // will never happen
+    if (!vtfheader)
+    {
+        return true;
+    }
+    memcpy(vtfheader.get(), bytes.get(), sizeof(VTFFileHeader_t));
 
-	// Get our header
-	VTFFileHeader_t* vtfheader = (VTFFileHeader_t*)calloc(1, sizeof(VTFFileHeader_t));
-	// will never happen
-	if (!vtfheader)
-	{
-		return true;
-	}
-	memcpy(vtfheader, bytes, sizeof(VTFFileHeader_t));
+    // Duh
+    if (!vtfheader->headerSize)
+    {
+        AssertMsg(NULL, "[VTF] Invalid header/headerSize");
+        return false;
+    }
 
-	// Duh
-	if (!vtfheader || !vtfheader->headerSize)
-	{
-		AssertMsg(NULL, "[VTF] Invalid header/headerSize");
-		free(vtfheader);
-		return false;
-	}
+    // Magic
+    if (memcmp(vtfheader->fileTypeString, "VTF\0", 4))
+    {
+        AssertMsg(NULL, "[VTF] Invalid header magic");
+        return false;
+    }
 
-	// Magic
-	if (memcmp(vtfheader->fileTypeString, "VTF\0", 4))
-	{
-		AssertMsg(NULL, "[VTF] Invalid header magic");
-		free(vtfheader);
-		return false;
-	}
+    // 7.5 or lower
+    if (vtfheader->version[0] > 7 || vtfheader->version[1] > 5)
+    {
+        AssertMsg(NULL, "[VTF] Invalid vtf version");
+        return false;
+    }
 
-	// 7.5 or lower
-	if (vtfheader->version[0] > 7 || vtfheader->version[1] > 5)
-	{
-		AssertMsg(NULL, "[VTF] Invalid vtf version");
-		free(vtfheader);
-		return false;
-	}
+    // basic size checks
+    if
+    (
+           vtfheader->width < 0
+        || vtfheader->width  > 8192
+        || vtfheader->height < 0
+        || vtfheader->height > 8192
+    )
+    {
+        AssertMsg(NULL, "[VTF] Invalid vtf dimensions");
+        return false;
+    }
 
-	// basic size checks
-	if
-		(
-			vtfheader->width < 0
-			|| vtfheader->width  > 8192
-			|| vtfheader->height < 0
-			|| vtfheader->height > 8192
-			)
-	{
-		AssertMsg(NULL, "[VTF] Invalid vtf dimensions");
-		free(vtfheader);
-		return false;
-	}
+    // basic flag checks
+    if
+    (
+        vtfheader->flags &
+        (
+              TEXTUREFLAGS_RENDERTARGET
+            | TEXTUREFLAGS_DEPTHRENDERTARGET
+            | TEXTUREFLAGS_NODEPTHBUFFER
+            | TEXTUREFLAGS_UNUSED_00400000
+            | TEXTUREFLAGS_UNUSED_01000000
+            | TEXTUREFLAGS_UNUSED_10000000
+            | TEXTUREFLAGS_UNUSED_40000000
+            | TEXTUREFLAGS_UNUSED_80000000
+        )
+    )
+    {
+        AssertMsg1(NULL, "[VTF] Invalid vtf flags = %x", vtfheader->flags);
+        return false;
+    }
 
-	// basic flag checks
-	if
-		(
-			vtfheader->flags &
-			(
-				TEXTUREFLAGS_RENDERTARGET
-				| TEXTUREFLAGS_DEPTHRENDERTARGET
-				| TEXTUREFLAGS_NODEPTHBUFFER
-				| TEXTUREFLAGS_UNUSED_00400000
-				| TEXTUREFLAGS_UNUSED_01000000
-				| TEXTUREFLAGS_UNUSED_10000000
-				| TEXTUREFLAGS_UNUSED_40000000
-				| TEXTUREFLAGS_UNUSED_80000000
-				)
-			)
-	{
-		AssertMsg1(NULL, "[VTF] Invalid vtf flags = %x", vtfheader->flags);
-		free(vtfheader);
-		return false;
-	}
-
-	free(vtfheader);
-	return true;
+    return true;
 }
 
-void UTIL_AddrToString(void* inAddr, char outAddrStr[11])
+#include <filesystem.h>
+#include <filesystem_helpers.h>
+std::unique_ptr<byte> UTIL_SmartLoadFileForMe(std::string& filename, int* pLength)
 {
-	// sizeof doesn't work for params
-	memset(outAddrStr, 0x0, 11);
-	if (!inAddr)
+    FileHandle_t file;
+    file = filesystem->Open(filename.c_str(), "rb", "GAME");
+    if (FILESYSTEM_INVALID_HANDLE == file)
+    {
+        if (pLength) *pLength = 0;
+        return NULL;
+    }
+
+    int size = filesystem->Size(file);
+    std::unique_ptr<byte> buffer(new byte[size + 1]);
+    if (!buffer)
+    {
+        Warning( "UTIL_SmartLoadFileForMe:  Couldn't allocate buffer of size %i for file %s\n", size + 1, filename.c_str() );
+        filesystem->Close(file);
+        return NULL;
+    }
+    filesystem->Read(buffer.get(), size, file);
+    filesystem->Close(file);
+
+    // Ensure null terminator
+    buffer.get()[size] = 0;
+
+    if (pLength)
+    {
+        *pLength = size;
+    }
+
+    return buffer;
+}
+
+std::string UTIL_AddrToString(void* inAddr)
+{
+    std::string outStr;
+    if (!inAddr)
 	{
-		V_snprintf(outAddrStr, 11, "(nil)");
+        outStr = "(nil)";
 	}
 	else
 	{
-		V_snprintf(outAddrStr, 11, "%p", inAddr);
+        outStr = fmt::format( FMT_STRING("{}"), fmt::ptr(inAddr));
 	}
 
-	return;
+    // this isn't dangling, this is an object and C++ returns by value
+    // actually technically it's moved to this return but whatever
+    return outStr;
 }
 
 std::vector<std::string> UTIL_SplitSTDString(const std::string& i_str, const std::string& i_delim)
@@ -255,4 +283,56 @@ void UTIL_GetMap(char mapname[128])
 	V_FileBase(engine->GetLevelName(), mapname, 128);
 	V_strlower(mapname);
 }
+
+
+#include <Windows.h>
+#include <engine_hacks/engine_detours.h>
+// ret's true if we're running under wine/proton
+bool checkWine()
+{
+#ifdef _WIN32
+    static const char* (__cdecl * pwine_get_version)(void);
+    HMODULE hntdll = GetModuleHandle("ntdll.dll");
+    if (!hntdll)
+    {
+        Error("Not running on NT.");
+        return false;
+    }
+    FARPROC fp = GetProcAddress(hntdll, "wine_get_version");
+
+    pwine_get_version = PLH::FnCast(fp, pwine_get_version);
+    if (pwine_get_version)
+    {
+        Warning("Running on Wine... %s\n", pwine_get_version());
+        return true;
+    }
+    else
+    {
+        Warning("did not detect Wine.\n");
+        return false;
+    }
+#else
+    return false;
+#endif
+}
+
+// Hackily grabbed from other places in the sdk since this is for some reason undefined in places
+const char* HACK_COM_GetModDirectory()
+{
+    static char modDir[MAX_PATH];
+    if (Q_strlen(modDir) == 0)
+    {
+        const char* gamedir = CommandLine()->ParmValue("-game", CommandLine()->ParmValue("-defaultgamedir", "hl2"));
+        Q_strncpy(modDir, gamedir, sizeof(modDir));
+        if (strchr(modDir, '/') || strchr(modDir, '\\'))
+        {
+            Q_StripLastDir(modDir, sizeof(modDir));
+            int dirlen = Q_strlen(modDir);
+            Q_strncpy(modDir, gamedir + dirlen, sizeof(modDir) - dirlen);
+        }
+    }
+
+    return modDir;
+}
+
 #endif
